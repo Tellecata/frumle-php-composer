@@ -16,11 +16,17 @@ composer require --dev frumle/frumle
 # 1. Add your API key (get it from the Frumle dashboard)
 vendor/bin/frumle add-key <your-api-key>
 
+# Or set an environment variable (useful for CI — no add-key needed):
+export FRUMLE_API_KEY=frumle_…
+vendor/bin/frumle
+
 # 2. Analyze your project
 vendor/bin/frumle
 
-# 3. View results at https://frumle.tellecata.com
+# 3. View results at https://frumle.com
 ```
+
+`FRUMLE_API_KEY` overrides the key stored in `~/.frumle/config.json`.
 
 ## Commands
 
@@ -35,12 +41,21 @@ vendor/bin/frumle --project-name my-api        # Custom project name
 vendor/bin/frumle --ignore tests,storage       # Ignore specific directories
 ```
 
+**CI / unattended (env key, no local config write, JSON output):**
+
+```bash
+export FRUMLE_API_KEY=frumle_…
+vendor/bin/frumle . --project-name "my-api" --skip-config-write --json
+```
+
+When `CI=true` (GitHub Actions sets this), Frumle skips writing `frumle.config.json` automatically.
+
 ### `vendor/bin/frumle add-key <api-key>`
 
 Add or update your API key. Verifies the key with the server before saving.
 
 ```bash
-vendor/bin/frumle add-key devdoc_abc123...
+vendor/bin/frumle add-key frumle_abc123...
 ```
 
 ### `vendor/bin/frumle login <api-key>`
@@ -54,6 +69,51 @@ Check your API key status, quota, and usage statistics.
 ```bash
 vendor/bin/frumle status
 ```
+
+### `vendor/bin/frumle ci [--force] [directory]`
+
+Add `.github/workflows/frumle.yml` so docs regenerate on every push to `main`/`master`.
+
+```bash
+vendor/bin/frumle ci              # Create the workflow
+vendor/bin/frumle ci --force      # Overwrite an existing frumle.yml
+```
+
+**Auto-docs on every push (GitHub Action):**
+
+1. Run `vendor/bin/frumle` once — when asked, choose **Y** to add `.github/workflows/frumle.yml`  
+   (or run `vendor/bin/frumle ci` anytime)
+2. Set the secret:
+
+```bash
+gh secret set FRUMLE_API_KEY
+```
+
+3. Commit and push the workflow file
+
+After that, every push to `main`/`master` queues a fresh analysis. Docs show up in your [dashboard](https://frumle.com/dashboard).  
+A green Actions run means the scan was **queued** — not that docs finished instantly.
+
+If you choose **n** at the prompt, you’ll need to run `frumle` yourself whenever docs should update.
+
+## Options
+
+| Flag | Description |
+|------|-------------|
+| `--project-name <name>` | Project name (defaults to `composer.json` name or directory) |
+| `--ignore <dirs>` | Comma-separated directories to ignore |
+| `--skip-config-write` | Do not write/update `frumle.config.json` (also default when `CI=true`) |
+| `--json` | Print a single JSON result (implies quiet) |
+| `--quiet` | Suppress human-readable progress logs |
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Analysis queued or completed |
+| `1` | Client / unexpected error (bad path, no files, etc.) |
+| `2` | Auth failure (missing or invalid API key) |
+| `3` | Quota or payment required |
 
 ## Supported Frameworks
 
@@ -90,7 +150,7 @@ The scanner collects these file types from your project:
 
 ### API Key
 
-Stored at `~/.frumle/config.json`. Shared across all Frumle tools (npm, Python, Maven, PHP).
+Auth: `FRUMLE_API_KEY` env (preferred), else `~/.frumle/config.json` from `add-key`. Shared across all Frumle tools (npm, Python, Maven, PHP).
 
 ### Project Configuration
 
@@ -164,10 +224,11 @@ Detects Slim via `public/index.php` and scans route definitions and middleware.
 
 ## Environment Variables
 
-| Variable         | Description                    | Default                                        |
-|------------------|--------------------------------|------------------------------------------------|
-| `FRUMLE_API_URL` | Backend API URL (for testing)  | `https://frumle-production.up.railway.app`   |
-| `FRUMLE_API_KEY` | API key (alternative to config)| —                                              |
+| Variable         | Description                                      | Default                                      |
+|------------------|--------------------------------------------------|----------------------------------------------|
+| `FRUMLE_API_KEY` | API key (overrides `~/.frumle/config.json`)      | —                                            |
+| `FRUMLE_API_URL` | Backend API URL (for testing)                    | `https://frumle-production.up.railway.app`   |
+| `CI`             | When `true`/`1`, skip writing `frumle.config.json` | —                                         |
 
 ## License
 

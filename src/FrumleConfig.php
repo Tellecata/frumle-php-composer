@@ -167,8 +167,12 @@ class FrumleConfig
 
     /**
      * Ensure frumle.config.json exists with baseUrls; return baseUrls list.
+     * Pass $write = false for CI / --skip-config-write so the repo stays clean.
+     * When writing, merges into existing config (preserves ciPromptDeclined and other fields).
+     *
+     * @return list<array{environment: string, url: string}>
      */
-    public static function initialize(string $projectDir): array
+    public static function initialize(string $projectDir, bool $write = true): array
     {
         $existing = self::load($projectDir);
         $baseUrls = $existing['baseUrls'] ?? [];
@@ -192,7 +196,12 @@ class FrumleConfig
             $baseUrls[] = ['environment' => 'production', 'url' => ''];
         }
 
-        self::save($projectDir, ['baseUrls' => $baseUrls]);
+        if ($write) {
+            $merged = $existing;
+            $merged['baseUrls'] = $baseUrls;
+            self::save($projectDir, $merged);
+        }
+
         return $baseUrls;
     }
 }

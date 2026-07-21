@@ -6,17 +6,24 @@ namespace Frumle;
 
 /**
  * CLI command handler for the Frumle PHP package.
- * Commands: add-key, login, status, analyze (default).
+ * Commands: add-key, login, status, ci, analyze (default).
  */
 class Cli
 {
-    private const VERSION = '0.1.0';
+    public const VERSION = '0.3.0';
+
+    private const EXIT_OK = 0;
+    private const EXIT_ERROR = 1;
+    private const EXIT_AUTH = 2;
+    private const EXIT_QUOTA = 3;
 
     public function run(array $argv): void
     {
         $args = array_slice($argv, 1);
 
-        if (empty($args) || $args[0] === 'analyze' || $args[0][0] !== '-' && !in_array($args[0], ['add-key', 'login', 'status', 'help', '--help', '-h', '--version', '-v'], true)) {
+        $knownCommands = ['add-key', 'login', 'status', 'ci', 'help', '--help', '-h', '--version', '-v'];
+
+        if (empty($args) || $args[0] === 'analyze' || ($args[0][0] !== '-' && !in_array($args[0], $knownCommands, true))) {
             $this->cmdAnalyze($args);
             return;
         }
@@ -31,6 +38,9 @@ class Cli
             case 'status':
                 $this->cmdStatus();
                 break;
+            case 'ci':
+                $this->cmdCi($args);
+                break;
             case '--version':
             case '-v':
                 echo 'frumle ' . self::VERSION . PHP_EOL;
@@ -43,7 +53,7 @@ class Cli
             default:
                 $this->error("Unknown command: {$command}");
                 $this->showHelp();
-                exit(1);
+                exit(self::EXIT_ERROR);
         }
     }
 
@@ -51,14 +61,14 @@ class Cli
     {
         if (empty($args)) {
             $this->error('Usage: frumle add-key <api-key>');
-            exit(1);
+            exit(self::EXIT_ERROR);
         }
 
         $apiKey = trim($args[0]);
         if (strlen($apiKey) < 10) {
             $this->error('Invalid API key format');
             echo "   API key must be at least 10 characters long\n";
-            exit(1);
+            exit(self::EXIT_ERROR);
         }
 
         echo "🔐 Verifying API key with server...\n";
@@ -72,7 +82,7 @@ class Cli
             echo "   1. Your API key is correct\n";
             echo "   2. You registered at the Frumle dashboard\n";
             echo "   3. You have an internet connection\n";
-            exit(1);
+            exit(self::EXIT_AUTH);
         }
 
         Config::setApiKey($apiKey);
@@ -93,7 +103,7 @@ class Cli
             $status = $api->checkStatus();
         } catch (\Throwable $e) {
             $this->error("Status check failed: {$e->getMessage()}");
-            exit(1);
+            exit($this->classifyError($e->getMessage()));
         }
 
         echo "\n📊 Account Status\n";
@@ -114,23 +124,17 @@ class Cli
         }
     }
 
-    private function cmdAnalyze(array $args): void
+    private function cmdCi(array $args): void
     {
-        // Strip 'analyze' if it's the first arg
-        if (!empty($args) && $args[0] === 'analyze') {
-            array_shift($args);
-        }
-
         $directory = null;
         $projectName = null;
-        $ignore = null;
+        $force = false;
 
-        // Parse arguments
         for ($i = 0; $i < count($args); $i++) {
             if ($args[$i] === '--project-name' && isset($args[$i + 1])) {
                 $projectName = $args[++$i];
-            } elseif ($args[$i] === '--ignore' && isset($args[$i + 1])) {
-                $ignore = $args[++$i];
+            } elseif ($args[$i] === '--force') {
+                $force = true;
             } elseif ($args[$i][0] !== '-' && $directory === null) {
                 $directory = $args[$i];
             }
@@ -141,24 +145,93 @@ class Cli
 
         if ($targetDir === false || !is_dir($targetDir)) {
             $this->error("Directory \"{$directory}\" does not exist");
-            exit(1);
+            exit(self::EXIT_ERROR);
+        }
+
+        try {
+            GithubAction::installCli($targetDir, $projectName, $force);
+        } catch (\Throwable $e) {
+            $this->error($e->getMessage());
+            exit(self::EXIT_ERROR);
+        }
+    }
+
+    private function cmdAnalyze(array $args): void
+    {
+        // Strip 'analyze' if it's the first arg
+        if (!empty($args) && $args[0] === 'analyze') {
+            array_shift($args);
+        }
+
+        $directory = null;
+        $projectName = null;
+        $ignore = null;
+        $skipConfigWrite = false;
+        $asJson = false;
+        $quiet = false;
+
+        for ($i = 0; $i < count($args); $i++) {
+            if ($args[$i] === '--project-name' && isset($args[$i + 1])) {
+                $projectName = $args[++$i];
+            } elseif ($args[$i] === '--ignore' && isset($args[$i + 1])) {
+                $ignore = $args[++$i];
+            } elseif ($args[$i] === '--skip-config-write') {
+                $skipConfigWrite = true;
+            } elseif ($args[$i] === '--json') {
+                $asJson = true;
+            } elseif ($args[$i] === '--quiet') {
+                $quiet = true;
+            } elseif ($args[$i][0] !== '-' && $directory === null) {
+                $directory = $args[$i];
+            }
+        }
+
+        $quiet = $quiet || $asJson;
+
+        $log = static function (string ...$parts) use ($quiet): void {
+            if (!$quiet) {
+                echo implode('', $parts) . "\n";
+            }
+        };
+
+        $directory = $directory ?? getcwd();
+        $targetDir = realpath($directory);
+
+        if ($targetDir === false || !is_dir($targetDir)) {
+            $this->finish(
+                self::EXIT_ERROR,
+                ['error' => "Directory does not exist: {$directory}", 'code' => self::EXIT_ERROR],
+                $asJson,
+                ["❌ Error: Directory \"{$directory}\" does not exist"]
+            );
         }
 
         $apiKey = Config::getApiKey();
         if ($apiKey === null) {
-            $this->error('No API key found!');
-            echo "\n💡 To get started:\n";
-            echo "   1. Register at the Frumle dashboard\n";
-            echo "   2. Add your API key: frumle add-key <your-api-key>\n";
-            echo "   3. Or use: frumle login <your-api-key>\n";
-            exit(1);
+            $this->finish(
+                self::EXIT_AUTH,
+                [
+                    'error' => 'No API key found',
+                    'code' => self::EXIT_AUTH,
+                    'hint' => 'Set FRUMLE_API_KEY or run: frumle add-key <your-api-key>',
+                ],
+                $asJson,
+                [
+                    "\n❌ No API key found!",
+                    "\n💡 To get started:",
+                    '   1. Register at the Frumle dashboard',
+                    '   2. Set FRUMLE_API_KEY, or',
+                    '   3. Add your API key: frumle add-key <your-api-key>',
+                    '   4. Or use: frumle login <your-api-key>',
+                ]
+            );
         }
 
-        echo "🚀 Starting codebase analysis...\n";
-        echo "📁 Directory: {$targetDir}\n\n";
+        $log('🚀 Starting codebase analysis...');
+        $log("📁 Directory: {$targetDir}");
+        $log('');
 
-        // Scan files
-        echo "📂 Scanning files...\n";
+        $log('📂 Scanning files...');
 
         $ignoreDirs = $ignore !== null
             ? array_map('trim', explode(',', $ignore))
@@ -169,13 +242,17 @@ class Cli
         $files = Scanner::readCodebase($targetDir, $ignoreDirs, $fileExtensions);
 
         if (empty($files)) {
-            $this->error('No files found to analyze');
-            exit(1);
+            $this->finish(
+                self::EXIT_ERROR,
+                ['error' => 'No files found to analyze', 'code' => self::EXIT_ERROR, 'directory' => $targetDir],
+                $asJson,
+                ["\n❌ No files found to analyze"]
+            );
         }
 
-        echo "✅ Found " . count($files) . " files\n\n";
+        $log('✅ Found ' . count($files) . ' files');
+        $log('');
 
-        // Determine project name
         if ($projectName === null) {
             $composerPath = $targetDir . DIRECTORY_SEPARATOR . 'composer.json';
             if (file_exists($composerPath)) {
@@ -190,14 +267,18 @@ class Cli
         }
         $projectName = trim($projectName) ?: 'unknown-project';
 
-        // Detect base URLs
-        echo "🔍 Detecting base URLs...\n";
-        $baseUrls = FrumleConfig::initialize($targetDir);
+        $ci = getenv('CI');
+        $writeConfig = !$skipConfigWrite && $ci !== 'true' && $ci !== '1';
+        $log('🔍 Detecting base URLs...');
+        $baseUrls = FrumleConfig::initialize($targetDir, $writeConfig);
+        if (!$writeConfig) {
+            $log('ℹ️  Skipping frumle.config.json write (CI or --skip-config-write)');
+        }
 
-        if (!empty($baseUrls)) {
+        if (!empty($baseUrls) && !$quiet) {
             foreach ($baseUrls as $entry) {
                 if (($entry['environment'] ?? '') === 'local' && !empty($entry['url'])) {
-                    echo "✅ Local URL detected: {$entry['url']}\n";
+                    $log("✅ Local URL detected: {$entry['url']}");
                 }
             }
             $hasProd = false;
@@ -207,12 +288,12 @@ class Cli
                 }
             }
             if (!$hasProd) {
-                echo "💡 Tip: Add production URL in frumle.config.json to test APIs in production\n";
+                $log('💡 Tip: Add production URL in frumle.config.json to test APIs in production');
             }
         }
 
-        echo "📦 Project: {$projectName}\n";
-        echo "🤖 Analyzing with AI...\n";
+        $log("📦 Project: {$projectName}");
+        $log('🤖 Analyzing with AI...');
 
         try {
             $api = new ApiClient();
@@ -229,62 +310,132 @@ class Cli
                 'baseUrls'       => !empty($baseUrls) ? $baseUrls : null,
             ]);
         } catch (\Throwable $e) {
-            $this->error("Analysis error: {$e->getMessage()}");
             $msg = $e->getMessage();
-            if (str_contains($msg, '401') || str_contains($msg, 'Unauthorized')) {
-                echo "\n💡 Try: frumle add-key <your-api-key>\n";
-            } elseif (str_contains($msg, '429') || str_contains($msg, 'Quota')) {
-                echo "\n💡 Check quota: frumle status\n";
+            $code = $this->classifyError($msg);
+            $human = ["\n❌ Analysis error: {$msg}"];
+            if ($code === self::EXIT_AUTH) {
+                $human[] = "\n💡 Authentication issue. Set FRUMLE_API_KEY or run: frumle add-key <your-api-key>";
+            } elseif ($code === self::EXIT_QUOTA) {
+                $human[] = "\n💡 Quota or billing issue. Check status: frumle status";
             }
-            exit(1);
+            $this->finish($code, ['error' => $msg, 'code' => $code], $asJson, $human);
         }
 
         $status = $response['status'] ?? null;
         $result = $response['result'] ?? null;
 
-        if ($status === 'processing' || $result === null) {
-            echo "\n" . str_repeat('=', 60) . "\n";
-            echo "✅ ANALYSIS STARTED\n";
-            echo str_repeat('=', 60) . "\n";
-            echo "\n📁 Directory: {$targetDir}\n";
-            echo "📄 Files queued: " . ($response['fileCount'] ?? count($files)) . "\n";
+        $offerCi = static function () use ($asJson, $quiet, $targetDir, $projectName): void {
+            if ($asJson || $quiet) {
+                return;
+            }
+            GithubAction::maybePrompt($targetDir, $projectName, true);
+        };
 
-            if (isset($response['quota'])) {
-                echo "\n📊 Quota:\n";
-                echo "   - Remaining: " . ($response['quota']['remaining'] ?? '?') . " analyses\n";
+        if ($status === 'processing' || $result === null) {
+            $fileCount = $response['fileCount'] ?? count($files);
+            if ($asJson) {
+                $this->finish(self::EXIT_OK, [
+                    'status' => 'processing',
+                    'directory' => $targetDir,
+                    'projectName' => $projectName,
+                    'fileCount' => $fileCount,
+                    'quotaRemaining' => $response['quota']['remaining'] ?? null,
+                    'message' => 'Analysis queued. Docs will appear in the dashboard shortly.',
+                    'code' => self::EXIT_OK,
+                ], true);
             }
 
-            echo "\n🔄 Analysis in progress...\n";
-            echo "📝 Your documentation will be available in your dashboard shortly.\n";
-            echo "🌐 Check your dashboard at: https://frumle.tellecata.com\n";
-            echo str_repeat('─', 60) . "\n";
+            $log("\n" . str_repeat('=', 60));
+            $log('✅ ANALYSIS STARTED');
+            $log(str_repeat('=', 60));
+            $log("\n📁 Directory: {$targetDir}");
+            $log("📄 Files queued: {$fileCount}");
+
+            if (isset($response['quota'])) {
+                $log("\n📊 Quota:");
+                $log('   - Remaining: ' . ($response['quota']['remaining'] ?? '?') . ' analyses');
+            }
+
+            $log("\n🔄 Analysis in progress...");
+            $log('📝 Your documentation will be available in your dashboard shortly.');
+            $log('🌐 Check your dashboard at: https://frumle.com');
+            $log(str_repeat('─', 60));
+            $offerCi();
             return;
         }
 
-        echo "\n" . str_repeat('=', 60) . "\n";
-        echo "📊 ANALYSIS RESULTS\n";
-        echo str_repeat('=', 60) . "\n";
+        if ($asJson) {
+            $this->finish(self::EXIT_OK, [
+                'status' => 'complete',
+                'directory' => $targetDir,
+                'projectName' => $projectName,
+                'framework' => $result['framework'] ?? null,
+                'stats' => $result['stats'] ?? null,
+                'quotaRemaining' => $response['quota']['remaining'] ?? null,
+                'code' => self::EXIT_OK,
+            ], true);
+        }
+
+        $log("\n" . str_repeat('=', 60));
+        $log('📊 ANALYSIS RESULTS');
+        $log(str_repeat('=', 60));
 
         if (!empty($result['framework'])) {
-            echo "\n🎯 Framework: {$result['framework']}\n";
+            $log("\n🎯 Framework: {$result['framework']}");
         }
 
         $stats = $result['stats'] ?? [];
-        echo "\n📈 Statistics:\n";
-        echo "   - Total Files: " . ($stats['totalFiles'] ?? '?') . "\n";
-        echo "   - Analyzed: " . ($stats['analyzedFiles'] ?? '?') . "\n";
-        echo "   - Total Chunks: " . ($stats['totalChunks'] ?? '?') . "\n";
+        $log("\n📈 Statistics:");
+        $log('   - Total Files: ' . ($stats['totalFiles'] ?? '?'));
+        $log('   - Analyzed: ' . ($stats['analyzedFiles'] ?? '?'));
+        $log('   - Total Chunks: ' . ($stats['totalChunks'] ?? '?'));
 
         if (isset($response['quota'])) {
-            echo "\n📊 Quota:\n";
-            echo "   - Remaining: " . ($response['quota']['remaining'] ?? '?') . " analyses\n";
+            $log("\n📊 Quota:");
+            $log('   - Remaining: ' . ($response['quota']['remaining'] ?? '?') . ' analyses');
         }
 
-        echo "\n📝 Summary:\n";
-        echo str_repeat('-', 60) . "\n";
-        echo ($result['summary'] ?? '') . "\n";
-        echo str_repeat('-', 60) . "\n";
-        echo "\n✅ Analysis complete! Results saved to the dashboard.\n";
+        $log("\n📝 Summary:");
+        $log(str_repeat('-', 60));
+        $log($result['summary'] ?? '');
+        $log(str_repeat('-', 60));
+        $log("\n✅ Analysis complete! Results saved to the dashboard.");
+        $offerCi();
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @param list<string>|null $humanLines
+     */
+    private function finish(int $code, array $payload, bool $asJson, ?array $humanLines = null): void
+    {
+        if ($asJson) {
+            $payload['ok'] = $code === self::EXIT_OK;
+            echo json_encode($payload, JSON_UNESCAPED_SLASHES) . "\n";
+        } elseif ($humanLines !== null) {
+            foreach ($humanLines as $line) {
+                echo $line . (str_ends_with($line, "\n") ? '' : "\n");
+            }
+        }
+        exit($code);
+    }
+
+    private function classifyError(string $message): int
+    {
+        $m = strtolower($message);
+        if (str_contains($m, '401') || str_contains($m, 'unauthorized') || str_contains($m, 'invalid api key')) {
+            return self::EXIT_AUTH;
+        }
+        if (
+            str_contains($m, '429')
+            || str_contains($m, 'quota')
+            || str_contains($m, '402')
+            || str_contains($m, 'payment')
+            || str_contains($m, 'subscription')
+        ) {
+            return self::EXIT_QUOTA;
+        }
+        return self::EXIT_ERROR;
     }
 
     private function showHelp(): void
@@ -299,10 +450,14 @@ Usage:
   frumle add-key <api-key>            Add your API key
   frumle login <api-key>              Login with API key (alias for add-key)
   frumle status                       Check API key status and quota
+  frumle ci [--force] [directory]     Add GitHub Action for auto-docs on push
 
 Options:
   --project-name <name>               Project name (defaults to composer.json name or directory)
   --ignore <dirs>                     Comma-separated directories to ignore
+  --skip-config-write                 Do not write/update frumle.config.json (also default when CI=true)
+  --json                              Print a single JSON result (implies quiet)
+  --quiet                             Suppress human-readable progress logs
   --version, -v                       Show version
   --help, -h                          Show this help
 
@@ -314,6 +469,8 @@ Examples:
   frumle ./src                        Analyze src directory
   frumle --project-name my-api        Analyze with custom project name
   frumle --ignore tests,storage       Ignore tests and storage directories
+  frumle . --skip-config-write --json CI / unattended mode
+  frumle ci                           Add .github/workflows/frumle.yml
 
 HELP;
     }

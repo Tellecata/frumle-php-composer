@@ -1,0 +1,12 @@
+{
+    "baseUrls": [
+        {
+            "environment": "local",
+            "url": "http://localhost:8000"
+        },
+        {
+            "environment": "production",
+            "url": ""
+        }
+    ]
+}

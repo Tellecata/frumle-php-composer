@@ -77,8 +77,19 @@ class Config
         }
     }
 
+    /**
+     * Get API key from FRUMLE_API_KEY env (preferred) or ~/.frumle/config.json
+     */
     public static function getApiKey(): ?string
     {
+        $envKey = getenv('FRUMLE_API_KEY');
+        if (is_string($envKey)) {
+            $envKey = trim($envKey);
+            if ($envKey !== '') {
+                return $envKey;
+            }
+        }
+
         $config = self::load();
         return $config['apiKey'] ?? null;
     }
