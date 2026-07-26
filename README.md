@@ -227,7 +227,7 @@ Detects Slim via `public/index.php` and scans route definitions and middleware.
 | Variable         | Description                                      | Default                                      |
 |------------------|--------------------------------------------------|----------------------------------------------|
 | `FRUMLE_API_KEY` | API key (overrides `~/.frumle/config.json`)      | —                                            |
-| `FRUMLE_API_URL` | Backend API URL (for testing)                    | `https://frumle-production.up.railway.app`   |
+| `FRUMLE_API_URL` | Backend API URL override (testing / self-host)   | production default (built into CLI)          |
 | `CI`             | When `true`/`1`, skip writing `frumle.config.json` | —                                         |
 
 ## License
