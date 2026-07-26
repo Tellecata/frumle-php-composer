@@ -10,7 +10,7 @@ namespace Frumle;
  */
 class Cli
 {
-    public const VERSION = '0.3.0';
+    public const VERSION = '0.3.1';
 
     private const EXIT_OK = 0;
     private const EXIT_ERROR = 1;
